@@ -1,14 +1,3 @@
----
-title: "COVID-19"
-author: "Mike"
-date: "3/12/2020"
-output: 
-  html_document:
-    toc: TRUE
-    keep_md: TRUE
----
-
-
 
 ## Analysis of COVID-19 (SARS-CoV-2)
 
