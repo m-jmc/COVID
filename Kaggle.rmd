@@ -676,6 +676,7 @@ cases.death.world
 ```{r, echo=FALSE, include=FALSE}
 
 #Loading package here as it will mask the "plot" object from base graphics.
+
 library(tigris)
 
 # Create the map object using the tigris package
@@ -799,29 +800,5 @@ Here are the top 15 States by case including per capita (per 100,000 population,
 formattable(state.tbl.tbl)
 
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
