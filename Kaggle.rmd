@@ -12,8 +12,9 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Welcome to my first kaggle submission! Check back for weekly updates as this is very much a work in progress. Feedback, tips, and comments are appreciated. I hope you find this helpful!
-
+Welcome to my first Kaggle submission! Check back for weekly updates as this is very much a work in progress. Feedback, tips, and comments are appreciated. I hope you find this helpful!
+<br>
+Update 3/24/20: Included case trending by US State, put date parsing into a function, reorg of the data loading steps <br>
 Update 3/23/20: Updated Maps using Leaflet, US Choropleth and per capita case and death rates.
 
 
@@ -31,6 +32,9 @@ library(directlabels)
 library(leaflet)
 library(scales)
 library(usmap)
+library(rgdal)
+library(sp)
+
 
 ###################################
 ## Must update with data refresh ##
@@ -38,9 +42,10 @@ library(usmap)
 
 # This variable is referenced through the code, I found that the most recent data provided wasn't always complete
 # therefore, setting this date will adjust the graphs and subsets throughout to use the most complete data availible
-# Specified by you
 
-latest_date <- list(as.Date('2020-03-22'))
+#---------------------------------------------------------------------------------------------DATE UPDATE
+
+latest_date <- list(as.Date('2020-03-23'))
 
 # Setting these colors for use in the formattable table below
 customGreen0 = "#DeF7E9"
@@ -48,12 +53,36 @@ customGreen = "#71CA97"
 customRed = "#ff7f7f"
 customYel = "#C9C271"
 
-#########################
-## Data New             #
-#########################
+#---------------------------------------------------------------------------------------------DATA LOAD STEP
 
 data <- read_csv("covid_19_data.csv")
 #data <- read_csv("../input/novel-corona-virus-2019-dataset/covid_19_data.csv")
+
+#---------------------------------------------------------------------------------------------DATA LOAD STEP
+
+
+death.save <- read_csv("time_series_covid_19_deaths.csv")
+data.save <- read_csv("time_series_covid_19_confirmed.csv")
+
+#data.save <- read_csv("../input/novel-corona-virus-2019-dataset/time_series_covid_19_confirmed.csv")
+#death.save <- read_csv("../input/novel-corona-virus-2019-dataset/time_series_covid_19_deaths.csv")
+
+#---------------------------------------------------------------------------------------------DATE UPDATE
+
+death.recent <- death.save[,c("Province/State","Country/Region","Lat","Long","3/23/20")]
+data.recent <- data.save[,c("Province/State","Country/Region","Lat","Long","3/23/20")]
+colnames(death.recent)[colnames(death.recent)=="3/23/20"] <- "count"
+colnames(data.recent)[colnames(data.recent)=="3/23/20"] <- "count"
+
+#---------------------------------------------------------------------------------------------DATA LOAD STEP
+
+#states <- readOGR(dsn="../input/tempdir", layer="states")
+states <- readOGR(dsn="tempdir", layer="states")
+
+
+#########################
+## Data New             #
+#########################
 
 data.save <- data
 
@@ -71,29 +100,45 @@ death <- subset(data, select = c(`Country/Region`, ObservationDate, Deaths))
 colnames(death)[colnames(death)=="ObservationDate"] <- "date"
 colnames(death)[colnames(death)=="Deaths"] <- "count"
 
+# Because we're looking at total by country, I'm grouping all Provice/States together by country and date to get a sum total of each country:
+
 death <- death %>%
           group_by(`Country/Region`,date) %>% 
           summarise_all(list(sum))
 
+########################
+## Date Parse Function #
+########################
+
+datefunction <- function(df) {
 
 # Date to char for parsing and conversion
-death$date <- as.character(death$date)
+df$date <- as.character(df$date)
 # Parse the date
-death$year<-sapply(death$date, function(x) as.numeric(strsplit(x,"/")[[1]][3]))
-death$month<-sapply(death$date, function(x) as.numeric(strsplit(x,"/")[[1]][1]))
-death$day<-sapply(death$date, function(x) as.numeric(strsplit(x,"/")[[1]][2]))
+df$year<-sapply(df$date, function(x) as.numeric(strsplit(x,"/")[[1]][3]))
+df$month<-sapply(df$date, function(x) as.numeric(strsplit(x,"/")[[1]][1]))
+df$day<-sapply(df$date, function(x) as.numeric(strsplit(x,"/")[[1]][2]))
 
 # Some years are "2020" some are "20" so this will set them all straight :)
-death$year <- ifelse(death$year == '2020', "20", death$year)
+df$year <- ifelse(df$year == '2020', "20", df$year)
 # Put us back in the year 2000
-death$year <- (as.numeric(death$year) + 2000)
+df$year <- (as.numeric(df$year) + 2000)
 # Reformat date into y-m-d 
-death$date<-as.Date(paste0(death$year,'-',death$month,'-',death$day), format="%Y-%m-%d")
+df$date<-as.Date(paste0(df$year,'-',df$month,'-',df$day), format="%Y-%m-%d")
 # Add some weekdays for good measure
-death$weekday <- weekdays(as.Date(death$date))
+df$weekday <- weekdays(as.Date(df$date))
 # Put weekdays in order
-death$weekday <- ordered(death$weekday, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+df$weekday <- ordered(df$weekday, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
 
+df.date <<- df
+
+return(df.date)
+
+}
+
+datefunction(death)
+
+death <- df.date
 
 ##################
 ## Recovery Data #
@@ -107,23 +152,9 @@ reco <- reco %>%
           group_by(`Country/Region`,date) %>% 
           summarise_all(list(sum))
 
-# Date to char for parsing and conversion
-reco$date <- as.character(reco$date)
-# Parse the date
-reco$year<-sapply(reco$date, function(x) as.numeric(strsplit(x,"/")[[1]][3]))
-reco$month<-sapply(reco$date, function(x) as.numeric(strsplit(x,"/")[[1]][1]))
-reco$day<-sapply(reco$date, function(x) as.numeric(strsplit(x,"/")[[1]][2]))
+datefunction(reco)
 
-# Some years are "2020" some are "20" so this will set them all straight :)
-reco$year <- ifelse(reco$year == '2020', "20", reco$year)
-# Put us back in the year 2000
-reco$year <- (as.numeric(reco$year) + 2000)
-# Reformat date into y-m-d 
-reco$date<-as.Date(paste0(reco$year,'-',reco$month,'-',reco$day), format="%Y-%m-%d")
-# Add some weekdays for good measure
-reco$weekday <- weekdays(as.Date(reco$date))
-# Put weekdays in order
-reco$weekday <- ordered(reco$weekday, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+reco <- df.date
 
 #########################
 ## Confirmed Cases Data #
@@ -137,8 +168,14 @@ data <- data %>%
           group_by(`Country/Region`,date) %>% 
           summarise_all(list(sum))
 
-#Date Parsing Happens below:
+datefunction(data)
 
+data <- df.date
+
+
+# Set X axis limits 
+
+time <- as.POSIXct(strptime(c("2020-01-22",latest_date), format = "%y-%m-%d"))
 
 ```
 
@@ -150,7 +187,7 @@ Including the date formatting code on the next tab as it's nearly boilerplate. I
 
 ### Code
 
-```{r}
+```{r, eval=FALSE}
 
 # Date to char for parsing and conversion
 data$date <- as.character(data$date)
@@ -170,8 +207,6 @@ data$weekday <- weekdays(as.Date(data$date))
 # Put weekdays in order
 data$weekday <- ordered(data$weekday, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
 
-# Set X axis limits 
-time <- as.POSIXct(strptime(c("2020-01-22",latest_date), format = "%y-%m-%d"))
 
 ```
 
@@ -196,7 +231,7 @@ p <- ggplot(data, aes(date, `Country/Region`)) +
 
 ## Time Series Heatmap 
 
-At present, with China as a large confirmed case outlier (over 80,000), I rescaled the confirmed cases using a limit of 10,000 to give greater visibility to lower and emerging counts. 
+At present, with China as a large confirmed case outlier (over 80,000), I rescaled the confirmed cases using a limit of 10,000 to give greater visibility to lower and emerging counts. This gives us a sense of the sequencing and global spread of the pandemic to different countries over time.
 
 ```{r, echo=FALSE, fig.height=30, fig.width=18}
 
@@ -252,7 +287,7 @@ table.counts <- formattable(tbl.all, align =c("l","r","r","r","r","r"),
 
 ## Cases, Recoveries, and Deaths
 
-For the top 10 countries with the most cases, most recent recovery and death counts are included below. Recovery and Mortality are calculated from the datasets provided. Additionally, we would expect a significant delay in reporting of recovered cases. 
+For the top 10 countries with the most cases, most recent recovery and death counts are included below. Recovery and Mortality are calculated from the datasets provided. Additionally, we would expect a significant delay in reporting of recovered cases. Here we see the current counts for the hardest hit countries.
 
 ```{r, echo=FALSE, warning=FALSE}
 
@@ -295,7 +330,7 @@ lol.trend <- ggplot(top, aes(x=reorder(`Country/Region`,count), y=count)) +
 
 ### Top 20 Global Trend
 
-Using ggplotly for an interactive plot, here are the Country/Region's in the top 20 for confirmed cases plotted since the pandemic started.
+Using ggplotly for an interactive plot, here are the Country/Region's in the top 20 for confirmed cases plotted since the pandemic started. You can see more clearly how the pandemic has grown in different countries compared to other countries. Of note, South Koreas highly effective containment strategy, contrasted with the US and Italian trends.
 
 ```{r, echo=FALSE, fig.height=8, fig.width=10}
 
@@ -304,6 +339,8 @@ ggplotly(trend)
 ```
 
 ### Top 20 Global Count
+
+A simple case count for each of the 20 most impacted countries.
 
 ```{r, echo=FALSE, fig.height=8, fig.width=10}
 
@@ -347,7 +384,7 @@ lol.death <- ggplot(top.death, aes(x=reorder(`Country/Region`,count), y=count)) 
 
 ### Top 20 Global Death Trend
 
-Time series plot of top 20 County/Region's with COVID-19 related deaths. There may be more than 20 countries listed depending on how many are "tied" for the 20th spot (to be fair, its an arbitrary cutoff for the visualization).
+Time series plot of top 20 County/Region's with COVID-19 related deaths. There may be more than 20 countries listed depending on how many are "tied" for the 20th spot (to be fair, its an arbitrary cutoff for the visualization). Similar to the case trend above, we can compare the trend in COVID-19 related fatalities across different countries. Given the concerns in increased hospital volumes, we would expect to see these trends reflect the countries effectiveness in containment.
 
 ```{r, echo=FALSE, fig.height=8, fig.width=10}
 
@@ -355,8 +392,9 @@ ggplotly(trend.death)
 
 ```
 
-### Top 20 Global Death Count
+### Top 20 Global Fatalities
 
+A simple count of fatalities for each of the 20 most impacted countries.
 
 ```{r, echo=FALSE, fig.height=8, fig.width=10}
 
@@ -400,7 +438,7 @@ hun.trend <- hun.cases %>% filter(`Country/Region` %in% top.ten$`Country/Region`
 
 ## Trend since first 100
 
-Plotting the trend of the top 10 countries by case, number of days since their initial 100 confirmed cases. This gives us a sense of the effectiveness of a countries response in containing the virus. Again, since with China in more advanced stages of the pandemic the x and y axis have been limited. Here we see US cases climing faster than some of the hardest hit countries China, Italy, and Iran.  
+Plotting the trend of the top 10 countries by case, number of days since their initial 100 confirmed cases. This gives us a sense of the effectiveness of a countries response in containing the virus. Again, since with China in more advanced stages of the pandemic the x and y axis have been limited. Here we see US cases climbing faster than some of the hardest hit countries China, Italy, and Iran. This suggests a poor national containment effort, particularly when contrasted with South Korea.
 
 ```{r, echo=FALSE, warning=FALSE, fig.height=8, fig.width=10}
 
@@ -413,7 +451,7 @@ ggplotly(hun.trend)
 
 ## Cases, Recoveries and Deaths (by country) {.tabset .tabset-fade}
 
-Graphs of relationship between confirmed cases and death for highly impacted countries. 
+Graphs of relationship between confirmed cases, recoveries, and fatalities for select highly impacted countries. These show the significant reporting delay in declaring case recovered.
 
 ### China
 
@@ -433,9 +471,10 @@ ggplot() +
                   group_by(date, count)), 
                   aes(x=as.POSIXct(date),y=count), color=customRed, fill=customRed) +
                   labs(title="China Confirmed Cases and Deaths", 
-                       subtitle = " Yellow is confirmed cases \n Green is number of recoveries \n Red is number of deaths") +
+                       subtitle = "Cases / Recoveries / Deaths") +
                   xlab("Date") + 
-                  ylab("Count of Cases / Deaths") 
+                  ylab("Count of Cases / Deaths")
+
 
 
 ```
@@ -459,7 +498,7 @@ ggplot() +
                   group_by(date, count)), 
                   aes(x=as.POSIXct(date),y=count), color=customRed, fill=customRed) +
                   labs(title="US Confirmed Cases and Deaths", 
-                       subtitle = " Yellow is confirmed cases \n Green is number of recoveries \n Red is number of deaths") +
+                       subtitle = "Cases / Recoveries / Deaths") +
                   xlab("Date") + 
                   ylab("Count of Cases / Deaths") 
 
@@ -484,7 +523,7 @@ ggplot() +
                   group_by(date, count)), 
                   aes(x=as.POSIXct(date),y=count), color=customRed, fill=customRed) +
                   labs(title="Italy Confirmed Cases and Deaths", 
-                       subtitle = " Yellow is confirmed cases \n Green is number of recoveries \n Red is number of deaths") +
+                       subtitle = "Cases / Recoveries / Deaths") +
                   xlab("Date") + 
                   ylab("Count of Cases / Deaths") 
 
@@ -510,7 +549,7 @@ ggplot() +
                   group_by(date, count)), 
                   aes(x=as.POSIXct(date),y=count), color=customRed, fill=customRed) +
                   labs(title="Iran Confirmed Cases and Deaths", 
-                       subtitle = " Yellow is confirmed cases \n Green is number of recoveries \n Red is number of deaths") +
+                       subtitle = "Cases / Recoveries / Deaths") +
                   xlab("Date") + 
                   ylab("Count of Cases / Deaths") 
 
@@ -535,7 +574,7 @@ ggplot() +
                   group_by(date, count)), 
                   aes(x=as.POSIXct(date),y=count), color=customRed, fill=customRed) +
                   labs(title="South Korea Confirmed Cases and Deaths", 
-                       subtitle = " Yellow is confirmed cases \n Green is number of recoveries \n Red is number of deaths") +
+                       subtitle = "Cases / Recoveries / Deaths") +
                   xlab("Date") + 
                   ylab("Count of Cases / Deaths") 
 
@@ -561,7 +600,7 @@ ggplot() +
                   group_by(date, count)), 
                   aes(x=as.POSIXct(date),y=count), color=customRed, fill=customRed) +
                   labs(title="Spain Confirmed Cases and Deaths", 
-                       subtitle = " Yellow is confirmed cases \n Green is number of recoveries \n Red is number of deaths") +
+                       subtitle = "Cases / Recoveries / Deaths") +
                   xlab("Date") + 
                   ylab("Count of Cases / Deaths") 
 
@@ -570,10 +609,11 @@ ggplot() +
 
 ### Code
 
-Example code included, overlaying area plots from separate data frames. I wasn't able to identify a straightforward method to include a plot legend when combining multiple gg objects as done here-- comment below if you have one!
+Example code included, overlaying area plots from separate data frames. I was able to add a legend using the plot.new+par+legend commands below but unfortunately they cause Kaggle to error. Resulting in the less ideal subtitle approach.
 
 ```{r, eval=FALSE}
 
+plot.new()
 ggplot() + 
       geom_area(data=(data %>% 
                   filter(`Country/Region` %in% "China") %>%
@@ -588,9 +628,13 @@ ggplot() +
                   group_by(date, count)), 
                   aes(x=as.POSIXct(date),y=count), color=customRed, fill=customRed) +
                   labs(title="Spain Confirmed Cases and Deaths", 
-                       subtitle = " Yellow is confirmed cases \n Green is number of recoveries \n Red is number of deaths") +
+                       subtitle = " \n ") +
                   xlab("Date") + 
-                  ylab("Count of Cases / Deaths") 
+                  ylab("Count of Cases / Deaths")
+par(xpd=TRUE)
+legend("top", legend=c("Cases", "Recoveries","Deaths"), text.width = max(sapply(text, strwidth)),
+       col=c(customYel, customGreen, customRed), lwd=4, cex=.8, horiz = TRUE)
+par(xpd=FALSE)
 
 
 ```
@@ -600,23 +644,7 @@ ggplot() +
 ```{r, echo=FALSE}
 
 
-#---------------------------------------------------------------------------------------------DATA LOAD STEP
 
-
-death.save <- read_csv("time_series_covid_19_deaths.csv")
-data.save <- read_csv("time_series_covid_19_confirmed.csv")
-
-#data.save <- read_csv("../input/novel-corona-virus-2019-dataset/time_series_covid_19_confirmed.csv")
-#death.save <- read_csv("../input/novel-corona-virus-2019-dataset/time_series_covid_19_deaths.csv")
-
-#---------------------------------------------------------------------------------------------DATE UPDATE
-
-death.recent <- death.save[,c("Province/State","Country/Region","Lat","Long","3/22/20")]
-data.recent <- data.save[,c("Province/State","Country/Region","Lat","Long","3/22/20")]
-
-
-colnames(death.recent)[colnames(death.recent)=="3/22/20"] <- "count"
-colnames(data.recent)[colnames(data.recent)=="3/22/20"] <- "count"
 
 death.recent <- death.recent %>% filter(count > 0)
 data.recent <- data.recent %>% filter(count > 0)
@@ -662,7 +690,7 @@ cases.death.world <- leaflet() %>%
 
 ## Worldwide COVID Cases/Deaths
 
-Using the leaflet package here to generate an interactive worldwide map of COVID 19 Confirmed cases and deaths. Markers are sized according to count of either cases or deaths scaled to between 0 and 10. 
+Using the leaflet package here to generate an interactive worldwide map of COVID 19 Confirmed cases and deaths. Markers are sized according to count of either cases or deaths scaled to between 0 and 10.  
 
 
 ```{r, echo=FALSE}
@@ -675,12 +703,28 @@ cases.death.world
 
 ```{r, echo=FALSE, include=FALSE}
 
-#Loading package here as it will mask the "plot" object from base graphics.
 
-library(tigris)
 
-# Create the map object using the tigris package
-states <- states(cb=T)
+
+## Apparently Kaggle doesn't use R 3.6 which is required for the tigris package below
+# (more specifically, I think its that dplyer 8.5 is the dependency which requires R 3.6)
+## so rather than reconstruct the wheel, I've exported the data needed from this package and uploaded it to kaggle
+## I'm including the phantom script here should anyone want to replicate this on their local machine
+## Something to watch out for is that the tigris package will mask "plot" so you'll need to adjust the script if you load it earlier
+## Or use what I imagine is poor programming practice and just load it here till I feel like updating the "ggplot::plot()" calls
+
+#library(tigris)
+
+## Create the map object using the tigris package
+
+#states <- states(cb=T)
+
+## Using the rgdal package to export the S4 SpatialPolygonsDataFrame so I can add it to Kaggle as an external dataset
+
+# dir.create("tempdir")
+# writeOGR(obj=states, dsn="tempdir", layer="states", driver="ESRI Shapefile")
+
+# -----------------------------------------------------------------------------------------Importing the OGR from the tigris package
 
 # filter down the current data for US states
 count.state <- data.recent %>%
@@ -689,30 +733,31 @@ count.state <- data.recent %>%
   rename(state=`Province/State`,
          total=count)
 
-# Merge the state counts into the geo data
-state.merge <- geo_join(states, count.state, "NAME", "state")
+# update column for merging, I'll revert this back after the merge
+colnames(count.state)[colnames(count.state)=="state"] <- "NAME"
 
 # Adjust Rate per 100,000
 # To adjust confirmed cases  relative to population: 
 # load us map for 2015 Census population data
 #Take the statepop from the us mappackage: 
 state.pop <- statepop
-colnames(state.pop)[colnames(state.pop)=="full"] <- "state"
+colnames(state.pop)[colnames(state.pop)=="full"] <- "NAME"
 
 # left join the data
-count.state <- count.state %>% left_join(state.pop, by=c("state"))
+count.state <- count.state %>% left_join(state.pop, by=c("NAME"))
 
 # Calculating infections per 100,000 residents rounded to 2 digits
 count.state$Confirmed_Per_Capita <- round(count.state$total/count.state$pop_2015*100000,2)
 
-#merge updated counts into geo data
-state.merge <- geo_join(states, count.state, "NAME", "state")
+# can replace geo_join using sp "merge"
+
+state.merge <- sp::merge(states,count.state, by="NAME")
 
 #Set the color palette (viridis package option a = Magma)
 pal <- colorNumeric("magma", domain=state.merge$Confirmed_Per_Capita, na.color="transparent")
 
 # Set the popup text option
-popup_t <- paste0("State: ", as.character(state.merge$state),  "<br>", 
+popup_t <- paste0("State: ", as.character(state.merge$NAME),  "<br>", 
                   "Confirmed Cases Per 100,000 Residents: ", as.character(state.merge$Confirmed_Per_Capita),  "<br>",
                   "Total Cases: ", as.character(state.merge$total))
 
@@ -724,7 +769,7 @@ popup_t <- paste0("State: ", as.character(state.merge$state),  "<br>",
 
 ## US Choropleth Map
 
-An interactive Choropleth map showing confirmed COVID-19 Cases per 100,000 residents (2015 US Census Data):
+An interactive Choropleth map showing confirmed COVID-19 Cases per 100,000 residents (2015 US Census Data). This provides an understanding of infection case rates scaled to population.
 
 ```{r, echo=FALSE}
 
@@ -740,7 +785,7 @@ leaflet() %>%
   addLegend(pal = pal, 
             values = state.merge$Confirmed_Per_Capita, 
             position = "bottomright", 
-            title = "Cases Per 100,000")
+            title = "Cases Per Capita")
 
 ```
 
@@ -756,21 +801,21 @@ death.state <- death.recent %>%
                       total=count)
 
 colnames(death.state)[colnames(death.state)=="total"] <- "deaths"
-
+colnames(death.state)[colnames(death.state)=="state"] <- "NAME"
 
 # Creating various subsets to join with the state data to create a single data table with percapita cases and deaths
-death.tbl <- subset(death.state,select = c("deaths","state"))
-state.tbl <- death.tbl %>% left_join(count.state, by=c("state"))
+death.tbl <- subset(death.state,select = c("deaths","NAME"))
+state.tbl <- death.tbl %>% left_join(count.state, by=c("NAME"))
 state.tbl$Death_Per_Capita <- round(state.tbl$deaths/state.tbl$pop_2015*100000,2)
 
 # Find the top 10 states by number of cases
 state.tbl <- state.tbl %>% arrange(desc(Confirmed_Per_Capita)) 
-state.tbl.top <- top_n(ungroup(state.tbl), 15, Confirmed_Per_Capita)
+state.tbl.top <- top_n(ungroup(state.tbl), 10, Confirmed_Per_Capita)
 
 #renaming the columns
 colnames(state.tbl.top)[colnames(state.tbl.top)=="Confirmed_Per_Capita"] <- "Cases Per Cap"
 colnames(state.tbl.top)[colnames(state.tbl.top)=="Death_Per_Capita"] <- "Deaths per Cap"
-colnames(state.tbl.top)[colnames(state.tbl.top)=="state"] <- "States"
+colnames(state.tbl.top)[colnames(state.tbl.top)=="NAME"] <- "States"
 colnames(state.tbl.top)[colnames(state.tbl.top)=="deaths"] <- "Deaths"
 colnames(state.tbl.top)[colnames(state.tbl.top)=="total"] <- "Cases"
 
@@ -790,9 +835,12 @@ state.tbl.tbl <- formattable(state.tbl.top, align =c("l","r","r","r","r","r"),
 
 ```
 
+<br>
+<br>
+
 ## US Cases and Deaths Per Capita
 
-Here are the top 15 States by case including per capita (per 100,000 population, 2015 census data) cases, deaths, and percent mortality. This will allow us to compare state by state efforts in containment. 
+Here are the top 10 States by case including per capita (per 100,000 population, 2015 census data) cases, deaths, and percent mortality (again, calculated from within the dataset). This will allow us to compare state by state efforts in containment. 
 
 
 ```{r, echo=FALSE, warning=FALSE}
@@ -801,4 +849,198 @@ formattable(state.tbl.tbl)
 
 ```
 
+<br>
+<br>
 
+```{r, echo=FALSE, include=FALSE}
+
+# Subset of countries with 100 cases arranged in ascending date order, Then an ID column is created to increment 1 day by country to get the number of days since 100 confirmed cases between(Long, -152,-50)
+
+# subset states in the US with greater than 100 cases arranged from oldest to newest
+
+state.hun.cases <- data.save %>% 
+                   filter(`Country/Region` == "US" & 
+                          Confirmed >= 100) %>% 
+                   arrange(ObservationDate)
+
+# Rename date column for use in date parsing function
+colnames(state.hun.cases)[colnames(state.hun.cases)=="ObservationDate"] <- "date"
+
+# Parse date to filter on more recent accurate data ()
+datefunction(state.hun.cases)
+state.hun.cases <- df.date
+
+# I only want to see data from before the most recent date, as I'm finding oddities in the counts from more recent dates
+state.hun.cases <- state.hun.cases %>% filter(date < latest_date)
+
+
+# Sequence along obercation date
+state.hun.cases <-state.hun.cases %>% group_by(`Province/State`) %>% mutate(id = row_number())
+state.hun.cases <-state.hun.cases %>% group_by(`Province/State`) %>% mutate(id = 1:n())
+state.hun.cases <-state.hun.cases %>% group_by(`Province/State`) %>% mutate(id = seq_len(n()))
+state.hun.cases <-state.hun.cases %>% group_by(`Province/State`) %>% mutate(id = seq_along(date))
+
+
+# plotting the top 10 states by number of cases
+# direct labels is used here to add the country name to the end of the line
+state.hun.trend <- state.hun.cases %>% filter(`Province/State` %in% state.tbl.top$States) %>%
+                  group_by(id, Confirmed) %>%
+                  ggplot(aes(x=id,y=Confirmed, color=`Province/State`)) + 
+                  geom_point(size=.5) + 
+                  geom_line(alpha=.9) +
+                  ylim(0,30000) + 
+                  xlim(0,30) +
+                  scale_color_viridis(discrete = TRUE, option ="A") +
+                  labs(title="State Case Trend Since 100th Case",
+                       subtitle = "Top 10 states by Cases per capita") +
+                  xlab("Number of Days") + 
+                  ylab("Case Count")
+
+
+```
+
+<br>
+<br>
+
+## US State Trend since first 100
+
+Plotting the trend of the top 10 states by cases per capita, number of days since their initial 100 confirmed cases. This gives us a sense of the effectiveness of a state response in containing the virus. Here we see New York greatly accelerating their number of cases, will current efforts be enough to slow this trend?
+
+```{r, echo=FALSE, warning=FALSE, fig.height=8, fig.width=10}
+
+ggplotly(state.hun.trend)
+
+```
+
+
+## SIR
+
+An SIR model is an epidemiological model that computes the theoretical number of people infected with a contagious illness in a closed population over time. The key phrase being "closed population" but lets see how the model performs using numbers from Wuhan China compared to the current known outcome for that area.
+
+In addition to assuming a close population, we'll assume 100% potentially infective rate and use the entire population of Wuhan provice of Hubei as the number of susceptibles (2015 population est. 58.5 million (wiki)), beginning the model at 444 number of infectious and 0 recovered (Note: the dataset begins at 1/22 with 444 confirmed cases). 
+
+
+
+```{r, echo=FALSE, include=FALSE}
+
+# Subset Wuhan data
+wuhan <- data.save %>% filter(`Province/State` == "Hubei" & Confirmed >= 100)
+# Update date column for formatting function
+colnames(wuhan)[colnames(wuhan)=="ObservationDate"] <- "date"
+# Reformat date 
+datefunction(wuhan)
+wuhan <- df.date
+
+#subset needed columns
+wuhan.rates <- subset(wuhan, select = c("date","Confirmed","Deaths","Recovered"))
+
+# Melt into long form using ID variable "date"
+wuhan.m <- melt(wuhan.rates, "date")
+
+#plot current counts 
+wuhan.plot <- ggplot(wuhan.m, aes(x = as.POSIXct(date), 
+                         y = value, 
+                         colour = variable)) +
+                  geom_line() +
+                  scale_x_datetime(limits = time) + 
+                  scale_color_viridis(discrete = TRUE, option ="A") +
+                  labs(title="Wuhan Cases, Recoveries, and Deaths") +
+                  xlab("Date") + 
+                  ylab("Cases")
+
+plot(wuhan.plot)
+
+
+#Between 1/22 and 3/1 (39 days) 66,463 cases occured average of 1704 cases/day
+#Between 1/22 and 3/1 (39 days) 31,536 cases recovered average of 1087.44 recoveries/day
+
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+
+
+
+# https://rpubs.com/choisy/sir
+## Load deSolve package
+library(deSolve)
+
+## Create an SIR function
+sir_equations <- function(time, variables, parameters) {
+  with(as.list(c(variables, parameters)), {
+    dS <- -beta * I * S
+    dI <-  beta * I * S - gamma * I
+    dR <-  gamma * I
+    return(list(c(dS, dI, dR)))
+  })
+}
+
+
+#Between 1/22 and 3/1 (39 days) 66,463 cases occured average of 1704 cases/day
+#Between 1/22 and 3/1 (39 days) 31,536 cases recovered average of 1087.44 recoveries/day
+
+### Set parameters
+## Proportion in each compartment: 
+# Susceptible 0.999999, number of susceptibles at time = 0 (population of wuhan 58.5 million)
+# Infected 0.000001, number of infectious at time = 0 (initial count in dataset is 444)
+# Recovered 0, number of recovered (and immune) at time = 0
+
+initial_values <- c(
+  S = 58500000,  # number of susceptibles at time = 0 58500000
+  I =   444,  # number of infectious at time = 0 444
+  R =   0   # number of recovered (and immune) at time = 0
+)
+
+# Beta and gamma rates obtained here: (look for more updated source)
+# https://www.who.int/bulletin/online_first/20-255695.pdf
+## beta: infection parameter, infectious contact rate (/person/day) 
+## gamma: recovery parameter, recovery rate (/day)
+parameters_values <- c(
+  beta  = 2.2, # infectious contact rate (/person/day)
+  gamma = 2.3    # recovery rate (/day)
+)
+## Time frame
+time_values <- seq(0, 60) # days
+
+## Solve using ode (General Solver for Ordinary Differential Equations)
+sir.values <- ode(
+  y = initial_values,
+  times = time_values,
+  func = sir_equations,
+  parms = parameters_values 
+)
+
+## change to data frame
+sir.values <- as.data.frame(sir.values)
+
+## Show data
+head(sir.values, 10)
+
+
+```
+
+
+
+```{r, echo=FALSE}
+
+with(sir.values, {
+# plotting the time series of susceptibles:
+  plot(time, S, type = "l", col = "blue",
+       xlab = "time (days)", ylab = "number of people")
+# adding the time series of infectious:
+  lines(time, I, col = "red")
+# adding the time series of recovered:
+  lines(time, R, col = "green")
+})
+
+# adding a legend:
+legend("right", c("susceptibles", "infectious", "recovered"),
+       col = c("blue", "red", "green"), lty = 1, bty = "n")
+
+
+#The value of the R0 is
+#(999 + 1) * parameters_values["beta"] / parameters_values["gamma"]
+
+((999 + 1) * parameters_values["beta"] / parameters_values["gamma"])
+
+```
