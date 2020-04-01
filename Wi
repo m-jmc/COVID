@@ -1,0 +1,435 @@
+---
+title: "Wisconsin COVID-19 Tracking"
+author: "Mike"
+date: "4/1/2020"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#https://www.kaggle.com/fireballbyedimyrnmom/us-counties-covid-19-dataset
+
+
+# Introduction {.tabset .tabset-fade}
+
+"The New York Times is releasing a series of data files with cumulative counts of coronavirus cases in the United States, at the state and county level, over time. We are compiling this time series data from state and local governments and health departments in an attempt to provide a complete record of the ongoing outbreak.
+
+Since late January, The Times has tracked cases of coronavirus in real time as they were identified after testing. Because of the widespread shortage of testing, however, the data is necessarily limited in the picture it presents of the outbreak. [Kaggle](https://www.kaggle.com/fireballbyedimyrnmom/us-counties-covid-19-dataset). <br>
+
+Here I'll be adapting some of my work from the global and nation wide trending [HERE](https://www.kaggle.com/mcnamamj/covid-19-graphing-and-mapping) to my home state of Wisconsin.
+
+## Change Log
+
+Update 4/01/20: Initial Commit. <br>
+
+```{r, echo=FALSE,include=FALSE}
+
+library(tidyverse)
+library(lubridate)
+library(reshape2)
+library(viridis)
+library(ggthemes)
+library(plotly)
+library(maps)
+library(usmap)
+library(leaflet)
+library(rgdal)
+
+# Load the Times Dataset ----------------------------------------------------------------------------------DATA LOAD
+data <- read_csv("us-counties.csv")
+
+#Dataset is already a rolling total of cases by county
+# we dont need further aggregration and can grab the current total from the latest date in the dataset
+# specify the latest date value here: ---------------------------------------------------------------------DATE UPDATE
+latest_date <- list(as.Date('2020-03-30'))
+
+# Subset the most recent counts for wisconsin counties
+wi.recent <- data %>% filter(state == "Wisconsin" & date==latest_date)
+wi.all <- data %>% filter(state == "Wisconsin")
+
+# Loading the US_Map data for the state of wisconsin
+wis.map <- us_map(include = c("WI"))
+
+
+# loading US census 2015 county populations for wisconsin (also from us_map package)
+county.pop <- countypop %>% filter(abbr == "WI")
+county.pop <- subset(county.pop, select=c("fips","pop_2015"))
+
+# Joining county populations with most recent case totals by county
+recent.pop <- wi.recent %>% left_join(county.pop, by=c("fips"))
+
+# Set X axis limits 
+time <- as.POSIXct(strptime(c("2020-03-09",latest_date), format = "%y-%m-%d"))
+
+```
+
+
+
+```{r, include=FALSE, echo=FALSE}
+
+
+# calculate per capita rates
+recent.pop$Confirmed_Per_Capita <- round(recent.pop$cases/recent.pop$pop_2015*10000,2)
+recent.pop$Desths_Per_Capita <- round(recent.pop$deaths/recent.pop$pop_2015*10000,2)
+
+
+# Using the code below to load then write the sp object loaded along with this dataset until I can load tigris directly into kaggle
+
+# library(tigris)
+# ## Create the map object using the tigris package
+# wi.sp <- counties(state = "WI", cb = TRUE)
+# library(rgdal)
+# #dir.create("WisGeo")
+# writeOGR(obj=wi.sp, dsn="WisGeo", layer="wi.sp",  driver="ESRI Shapefile")
+
+# Loading state sp file into kaggle, tigis isn't availible in kaggle so I'm loading the sp this way
+#wi.sp <- readOGR(dsn="../input/WisGeo", layer="wi.sp")
+
+wi.sp <- readOGR(dsn="WisGeo", layer="wi.sp")
+
+
+# I dont love that I'm joinging these counties by name, but I'm not clear on GEOID vs Fips, I'll look into that later
+colnames(recent.pop)[colnames(recent.pop)=="county"] <- "NAME"
+
+wi.sp <- sp::merge(wi.sp,recent.pop, by="NAME")
+
+
+#Set the color palette (viridis package option a = Magma)
+pal <- colorNumeric("magma", domain=wi.sp$Confirmed_Per_Capita, na.color="transparent")
+# Set the popup text option
+popup_t <- paste0("County: ", as.character(wi.sp$NAME),  "<br>", 
+                  "Confirmed Cases Per 10,000 Residents: ", as.character(wi.sp$Confirmed_Per_Capita),  "<br>",
+                  "Total Cases: ", as.character(wi.sp$cases))
+
+
+
+```
+
+<br>
+<br>
+
+# Wisconsin COVID Rates
+
+## Choropleth Map
+
+An interactive Choropleth map showing confirmed COVID-19 Cases by county per 10,000 residents (2015 US Census Data). This provides an understanding of infection case rates scaled to population.
+
+```{r, echo=FALSE}
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(-89, 44.5, zoom = 6.5) %>% 
+  addPolygons(data = wi.sp , 
+              fillColor = ~pal(wi.sp$Confirmed_Per_Capita), 
+              fillOpacity = 0.7, 
+              weight = 0.2, 
+              smoothFactor = 0.2, 
+              popup = ~popup_t) %>%
+  addLegend(pal = pal, 
+            values = wi.sp$Confirmed_Per_Capita, 
+            position = "bottomright", 
+            title = "Cases Per Capita")
+            
+            
+```
+
+
+
+```{r, echo=FALSE, include=FALSE}
+
+# Because the most recent date has missing data, I'm using the next most recent date
+top.cases <- recent.pop %>% arrange(desc(cases))
+top.cases <- top_n(ungroup(top.cases), 20, cases)
+
+loli.plot <- ggplot(top.cases, aes(x=reorder(NAME,cases), y=cases)) +
+                  geom_segment( aes(x=reorder(NAME,cases), xend=reorder(NAME,cases), y=0, yend=cases)) +
+                  geom_point(size=5, color="red", fill=alpha("pink", 0.3), alpha=0.7, shape=21, stroke=2) +
+                  coord_flip() +
+                  labs(x="County", y="Count") +
+                  labs(title="Top 20 Wi Counties Confirmed Case Count")
+
+
+
+wi.top.trend <- wi.all %>% group_by(county) %>% arrange(desc(cases)) %>% top_n(20, cases)
+
+
+########################
+## Date Parse Function #
+########################
+
+datefunction <- function(df) {
+
+# Date to char for parsing and conversion
+df$date <- as.character(df$date)
+# Parse the date
+df$year<-sapply(df$date, function(x) as.numeric(strsplit(x,"-")[[1]][1]))
+df$month<-sapply(df$date, function(x) as.numeric(strsplit(x,"-")[[1]][2]))
+df$day<-sapply(df$date, function(x) as.numeric(strsplit(x,"-")[[1]][3]))
+
+# Some years are "2020" some are "20" so this will set them all straight :)
+df$year <- ifelse(df$year == '2020', "20", df$year)
+# Put us back in the year 2000
+df$year <- (as.numeric(df$year) + 2000)
+# Reformat date into y-m-d 
+df$date<-as.Date(paste0(df$year,'-',df$month,'-',df$day), format="%Y-%m-%d")
+# Add some weekdays for good measure
+df$weekday <- weekdays(as.Date(df$date))
+# Put weekdays in order
+df$weekday <- ordered(df$weekday, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+df.date <<- df
+
+return(df.date)
+
+}
+
+datefunction(wi.top.trend)
+
+wi.top.trend <- df.date
+
+
+
+# wi.top.trend.plot <- wi.top.trend %>%
+#                   ggplot(aes(x=as.POSIXct(date),y=cases, color=county)) + 
+#                   geom_point(size=.5) + 
+#                   geom_line(alpha=.5) + 
+#                   scale_x_datetime(limits =time) + 
+#                   scale_color_viridis(discrete = TRUE, option ="A") +
+#                   labs(title="WI County Case Trend",
+#                        subtitle = "Plot of top 20 counties by case count") +
+#                   xlab("Date") + 
+#                   ylab("Cases") 
+
+
+wi.top.trend.plot <- wi.top.trend %>%
+                  ggplot(aes(x=as.Date(date),y=cases, color=county)) + 
+                  geom_point(size=.5) + 
+                  geom_line(alpha=.5) +
+                  scale_color_viridis(discrete = TRUE, option ="A") +
+                  labs(title="WI County Case Trend",
+                       subtitle = "Plot of top 20 counties by case count") +
+                  xlab("Date") + 
+                  ylab("Cases")
+
+
+
+wi.top.trend.plot <- wi.shelter + geom_vline(xintercept=as.numeric(lubridate::ymd("2020-03-25")), color='red') +
+                   annotate("text", x=as.Date("2020-03-23"), y = 600, label = "Shelter in Place", size=3, colour="red")
+
+
+
+
+
+```
+
+<br>
+
+
+## County Breakdown
+
+### Count of Cases
+
+Plot of the top 20 Wisconsin Counties by total case count.
+
+```{r, echo=FALSE}
+
+plot(loli.plot)
+            
+```
+
+<br>
+
+### Trend
+
+Plot of the top 20 Wisconsin Counties by total case count, positive case count over time. 3/25 Gov Evers put a "shelter in place" order for all of wisconsin.
+
+```{r, echo=FALSE}
+
+ggplotly(wi.top.trend.plot)
+
+
+```
+
+
+## MKE Case Growth
+
+Plot of confirmed cases as of 3/30/2020, using count of COVID-19 lab test (by result component (LRR 10535)) with result of "Detected." See included SQL at end of the report. 
+
+```{r, echo=FALSE, warning=FALSE, fig.width=10}
+
+plot(mke.plot)
+
+
+```
+
+
+```{r}
+
+## Specify Model Inputs
+
+MKE <- data %>%
+
+# subsetting the confirmed cases into the Infected sequence count
+Infected <- mke %>% subset(select = c("SumTotal"))
+
+Infected <- as.numeric(unlist(Infected))
+
+# Creating a count of the number of days represented in the "Infected DF"
+Day <- 1:(length(Infected))
+
+# N is set to the population of MKE county (wiki source:  948,201 in 2018)
+N <- 948201
+
+# You can pull full state populations from the US_map package using US cencus data from 2015 (demo below)
+#statepop %>% filter(full == "New York") %>% subset(select = c("pop_2015")) %>% as.numeric()
+
+
+```
+
+
+```{r}
+
+## Setting SIR initial values as specified above
+
+initialvalues <- c(S = N-Infected[1], 
+          I = Infected[1], 
+          R = 0)
+
+## SIR functioN
+
+SIR <- function(time, state, parameters) {
+  par <- as.list(c(state, parameters))
+  with(par, {
+    dS <- -beta/N * I * S
+    dI <- beta/N * I * S - gamma * I
+    dR <- gamma * I
+    list(c(dS, dI, dR))
+    })
+}
+
+## Function to solve for residual sum of squares
+## From Learning Machines Blog: minimize the sum of the squared differences between the number of infected I at time t and the corresponding number of predicted cases by our model
+
+RSS <- function(parameters) {
+  names(parameters) <- c("beta", "gamma")
+  out <- ode(y = initialvalues, 
+             times = Day, 
+             func = SIR, 
+             parms = parameters)
+  fit <- out[ , 3]
+  sum((Infected - fit)^2)
+}
+
+# Finding values for Beta and gamma with smallest RSS (best fit)
+Opt <- optim(c(0.5, 0.5), RSS, method = "L-BFGS-B", lower = c(0, 0), upper = c(1, 1))
+
+# Check for convergence
+Opt$message
+## [1] "CONVERGENCE: REL_REDUCTION_OF_F <= FACTR*EPSMCH"
+
+# Set the SIR Beta and Gamma parameters
+opt.par <- setNames(Opt$par, c("beta", "gamma"))
+
+#View(opt.par)
+
+ 
+model.overtime <- 1:120 # time in days
+fit <- data.frame(ode(y = initialvalues, times = model.overtime, func = SIR, parms = opt.par))
+
+col <- 1:3
+
+```
+
+## MKE SIR {.tabset .tabset-fade}
+
+
+### Plot
+
+Assuming no interventions (which are already taking place) we can model the worst case trajectory of the pandemic. 
+
+```{r, echo=FALSE, include=FALSE}
+
+colnames(fit)[colnames(fit)=="S"] <- "susceptible"
+colnames(fit)[colnames(fit)=="I"] <- "Infected"
+colnames(fit)[colnames(fit)=="R"] <- "Recovered"
+
+fit.m <- melt(fit, "time")
+
+fit.plot <- ggplot(fit.m, aes(x = time, 
+                         y = value, 
+                         color = variable)) +
+                  geom_line(size=1.5) +
+                  scale_color_viridis(discrete = TRUE, option ="A") +
+                  scale_y_continuous(name="Cases", labels = scales::comma) +
+                  labs(title="MKE SIR Model") +
+                  xlab("Days") 
+
+
+# fit.log.plot <- ggplot(fit.m, aes(x = time, 
+#                          y = (log(value)), 
+#                          color = variable)) +
+#                   geom_line(size=1.5) +
+#                   scale_color_viridis(discrete = TRUE, option ="A") +
+#                   scale_y_continuous(name="Cases", labels = scales::comma) +
+#                   labs(title="MKE SIR Model Log") +
+#                   xlab("Days") 
+
+
+```
+
+
+```{r, echo=FALSE, fig.width=12}
+
+plot(fit.plot)
+
+
+```
+
+### Sources
+
+A quick overview of the SIR model itself can be found [here](https://www.public.asu.edu/~hnesse/classes/sir.html). <br>
+
+Much of the SIR model has been adapted from the [Learning Machines Blog](https://blog.ephorie.de/epidemiology-how-contagious-is-novel-coronavirus-2019-ncov). <br>
+
+With Additional references from [r-bloggers](https://www.r-bloggers.com/sir-model-with-desolve-ggplot2/). <br>
+
+Further inspiration from Tim Churches fantastic blog on COVID-19: <br>
+Churches (2020, Feb. 18). Tim Churches Health Data Science Blog: Analysing COVID-19 (2019-nCoV) outbreak data with R - part 1. Retrieved from https://timchurches.github.io/blog/posts/2020-02-18-analysing-covid-19-2019-ncov-outbreak-data-with-r-part-1/ 
+
+<br>
+<br>
+
+# MKE Projection Outcomes
+
+The resulting R0 (basic reproduction number, the number of cases generated from a single infection where the entire population is assumed to be susceptible) is lower than what we would expect from other literature but may reflect limited testing in the MKE area and incomplete picture of the total number of infected (% market share):  
+
+```{r, echo=FALSE}
+
+R0 <- setNames(opt.par["beta"] / opt.par["gamma"], "R0")
+
+R0
+
+```
+
+At the height of the pandemic we would see 54,582 infected in MKE County
+
+```{r, echo=FALSE}
+
+fit[fit$Infected == max(fit$Infected), "Infected", drop = FALSE] # height of pandemic
+#Infected
+#<dbl>
+#37	54,582	
+
+```
+
+Assuming the current WHO estimated mortality of 3.5%, results in a total of 1,910 fatalities in MKE County:
+
+```{r, echo=FALSE}
+ 
+max(fit$Infected) * 0.035 # Max fatalities assuming 3.5% mortality
+
+```
